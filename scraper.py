@@ -1,94 +1,133 @@
 #!/usr/bin/python
 
-import scraperwiki
+'''
+Created on 3 Nov 2016
+
+@author: incidentnormal
+'''
+
+import requests
 import lxml.html
-import uuid
+import scraperwiki
 import datetime
 import re
 import sys
-import requests
+
+class G:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36',
+    }
+    googxpath = "//h3[@class='r']/a/@href"
+    asinregex = re.compile("^[A-Z0-9]{10}$")
+    traktxpath_price = "//span[@class='price']"
+    traktxpath_name = "//div[@id='product_title']"
+
+class azProduct:
+    def __init__(self, asin=None, url=None, productName=None, productPrice=None):
+        self.timeStamp = datetime.datetime.now()
+        self.asin = asin
+        self.url = url
+        self.productName = productName
+        self.productPrice = productPrice
+        self.scrap = False
+    def getSqliteDatagram(self):
+        data = {
+                'url': self.url,
+                'asin': self.asin,
+                'name': self.productName,
+                'price': self.productPrice,
+                'timestamp':self.timeStamp,
+                }
+        return data
+    def selfDestruct(self):
+        self.scrap = True
+
+def parseArgs(argv):
+
+    script_name = argv[0]
+
+    search_term = None
+    search_result_count = 10
+
+    if len(argv) == 1:
+        print("Wrong number of arguments ({}), should be:\n {} search terms... <number-of-results>".format(str(len(argv)-1), script_name))
+        sys.exit(2)
+    elif len(argv) == 2:
+        search_term = argv[-1]
+    else:
+        if not argv[-1].isdigit():
+            search_term = argv[1:]
+        else:
+            search_term = argv[1:-1]
+            search_result_count = int(argv[-1])
+
+        if len(search_term) > 1:
+            search_term = "%20".join(search_term)
+        else:
+            search_term = search_term[0]
+
+    return search_term, search_result_count
+
+def getGoogResults(searchTerm, resultCount):
+    googurl = "https://www.google.co.uk/search?q={site:www.amazon.co.uk " + searchTerm + "}&num=" + str(resultCount)
+    return runScrape(googurl, G.googxpath)
+    
+def runScrapeRequest(url):
+    resp = requests.get(url, headers=G.headers)
+    root = lxml.html.fromstring(resp.text)
+    return root
+
+def parseXpath(root, xpath):
+    return root.xpath(xpath)
+
+def runScrape(url, xpath):
+    root = runScrapeRequest(url)
+    return parseXpath(root, xpath)
+
+def splitUrl(url, iSect):
+    return url.split('/')[iSect]
+
+def checkAsin(qasin):
+    if G.asinregex.match(qasin):
+        return qasin
+    return None
+
+def getAsin(url):
+    return checkAsin(splitUrl(url, -1))
+
+def runTraktorScrape(azp):
+    trakturl = "https://thetracktor.com/detail/" + azp.asin + "/uk/"
+    traktroot = runScrapeRequest(trakturl)
+    
+    traktprodnames = parseXpath(traktroot, G.traktxpath_name)
+    traktprices = parseXpath(traktroot, G.traktxpath_price)
+    if traktprices and traktprodnames:
+        price = traktprices[0].text_content().strip()
+        if price[0] == "$":
+            price = unichr(163) + price[1:]
+        azp.productPrice = price
+        azp.productName = traktprodnames[0].text_content().strip()
+    else:
+        azp.selfDestruct()
+    
 
 def main(argv):
 
-    if len(argv) != 2:
-       print("Wrong number of arguments ({}), should be 2 (search-term and number-of-results)".format(str(len(argv))))
-       sys.exit(2)
+    searchTerm, resultCount = parseArgs(argv)
+    
+    googresults = getGoogResults(searchTerm, resultCount)
+    
+    azProducts = [] # Currently unused
 
-    search_term = argv[0]
-    search_result_count = argv[1]
-
-    bingurl = "https://www.bing.com/search?q=" + search_term + "+site:amazon.co.uk&count=" + str(search_result_count)
-    binghtml = scraperwiki.scrape(bingurl)
-
-    bingroot = lxml.html.fromstring(binghtml)
-
-    bingresults = bingroot.xpath("//h2/a/@href")
-    asinregex = re.compile("^[A-Z0-9]{10}$")
-
-    ASINS = []
-
-    for result in bingresults:
-        urlparts = result.split('/')
-        qasin = urlparts[-1]
-        if asinregex.match(qasin):
-            ASINS.append(qasin)
-            #print(result, qasin)
-
-    summary = ""
-
-    headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36',
-        }
-
-    item_price_list = []
-
-    for asin in ASINS:
-
-        item_price = ["", ""]
-
-        url = "https://www.amazon.co.uk/dp/" + asin
-
-        #print("[{}]".format(url))
-        page = requests.get(url, headers=headers)
-        #html = scraperwiki.scrape(url)
-        html = page.text
-        #print(html)
-        amazonroot = lxml.html.fromstring(html)
-
-        amazontitle = amazonroot.xpath("//span[@id='productTitle']")
-        strtitle = ""
-        for title in amazontitle:
-            strtitle = title.text.strip()
-            if strtitle != "":
-                item_price[0] = strtitle
-            break
-
-        amazonprice = amazonroot.xpath("//span[@id='priceblock_ourprice']")
-        strprice = ""
-        for price in amazonprice:
-            strprice = price.text.strip()
-            if strprice != "" and item_price[0] != "":
-                item_price[1] = strprice
-            break
-
-        if item_price[0] != "" and item_price[1] != "":
-            item_price_list.append(item_price)
-            print(item_price[1] + " - " + item_price[0])
-
-            now = datetime.datetime.now()
-            data = {
-                'link': url,
-                'uuid' : str(uuid.uuid1()),
-                'title': "Price Monitoring " + str(now),
-                'description': item_price[0] + ": " + item_price[1],
-                'pubDate': str(now),
-            }
-
-            scraperwiki.sqlite.save(unique_keys=['link'],data=data)
-            #print("Saved to sqlite DB: [{}]".format(data))
-        #print("------")
-
-
+    for res in googresults:
+        asin = getAsin(res)
+        if asin != None:
+            azp = azProduct(asin=asin, url=res)
+            runTraktorScrape(azp)
+            if not azp.scrap:
+                azProducts.append(azp)
+                print(str(azp.getSqliteDatagram()))
+                scraperwiki.sqlite.save(unique_keys=['asin'], data=azp.getSqliteDatagram())
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main(sys.argv)
