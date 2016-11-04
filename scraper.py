@@ -101,12 +101,20 @@ def runTraktorScrape(azp):
     
     traktprodnames = parseXpath(traktroot, G.traktxpath_name)
     traktprices = parseXpath(traktroot, G.traktxpath_price)
+    
     if traktprices and traktprodnames:
         price = traktprices[0].text_content().strip()
-        if price[0] == "$":
-            price = unichr(163) + price[1:]
+        if not price:
+            azp.selfDestruct()
+        elif price[0] == "$":
+            price = unichr(163) + price[1:]        
         azp.productPrice = price
-        azp.productName = traktprodnames[0].text_content().strip()
+        
+        name = traktprodnames[0].text_content().strip()
+        if not name:
+            azp.selfDestruct()
+        else:
+            azp.productName = name
     else:
         azp.selfDestruct()
     
